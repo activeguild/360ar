@@ -59,6 +59,14 @@ button {
 }
 button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
 #reset { background: var(--paper); color: var(--ink); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center; }
+.seg { display: flex; background: var(--veil); border-radius: 999px; padding: 4px; }
+.seg button { background: transparent; color: var(--paper); padding: 8px 16px; font-size: 0.95rem; }
+.seg button[aria-pressed="true"] { background: var(--teal); color: var(--ink); }
+.seg button:disabled { opacity: 0.4; cursor: not-allowed; }
+#pick { background: var(--veil); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(251,247,239,.5); padding: 10px 18px; font-size: 0.95rem; }
+body:not(.pano) #pick { display: none; }
+body.pano video { visibility: hidden; }
 
 #start {
   position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
@@ -95,7 +103,15 @@ body.complete #done { display: flex; }
 
 <div class="bar">
   <div class="note" id="note" role="status"></div>
+  <div class="row">
+    <div class="seg" role="group" aria-label="背景の切り替え">
+      <button id="mCam" type="button" aria-pressed="true">カメラ</button>
+      <button id="mPano" type="button" aria-pressed="false">360度画像</button>
+    </div>
+    <button id="pick" type="button">画像を選ぶ</button>
+  </div>
   <button id="reset" type="button">いま向いている方を正面にする</button>
+  <input type="file" id="file" accept="image/*" hidden>
 </div>
 
 <div id="done"><span>8つ全部見つけました</span></div>
@@ -109,6 +125,7 @@ body.complete #done { display: flex; }
     </svg>
     <h1>ぐるっと<br>見回すAR</h1>
     <p>あなたの周りに8つのオブジェクトが浮かんでいます。スマホを顔の前に立てて持ち、その場で一周してみてください。画面の中央にとらえると「見つけた」に数えられます。タップすると跳ねます。</p>
+    <p>背景はカメラ映像と360度画像を切り替えられます。360度画像にすると、その景色の中に立っているような表示になります。</p>
     <p class="small">カメラと傾きセンサーの許可を求められたら「許可」を選んでください。パソコンや、センサーが使えない環境ではドラッグで見回せます。</p>
     <button id="go" type="button">カメラとセンサーを使って始める</button>
   </div>
@@ -140,6 +157,99 @@ body.complete #done { display: flex; }
   grid.material.transparent = true; grid.material.opacity = 0.18;
   grid.position.y = -1.6; grid.visible = false;
   world.add(grid);
+
+  // ---------- 360度画像の背景（球体の内側に貼る） ----------
+  function makeDefaultPano() {
+    const W = 2048, H = 1024, c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const g = c.getContext("2d");
+    const sky = g.createLinearGradient(0, 0, 0, H / 2);
+    sky.addColorStop(0, "#0F1B3D"); sky.addColorStop(0.55, "#3B5B94"); sky.addColorStop(1, "#F2B279");
+    g.fillStyle = sky; g.fillRect(0, 0, W, H / 2);
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 400; i++) {
+      g.fillStyle = `rgba(255,255,255,${0.3 + rnd() * 0.6})`;
+      g.fillRect(rnd() * W, rnd() * H * 0.3, 1.5, 1.5);
+    }
+    const sx = W * 0.58, sy = H * 0.455;
+    const glow = g.createRadialGradient(sx, sy, 10, sx, sy, 160);
+    glow.addColorStop(0, "rgba(255,236,190,1)"); glow.addColorStop(0.25, "rgba(255,200,140,0.6)"); glow.addColorStop(1, "rgba(255,180,120,0)");
+    g.fillStyle = glow; g.fillRect(sx - 160, sy - 160, 320, 320);
+    const ridge = (amp, seedP, color) => {
+      g.fillStyle = color; g.beginPath(); g.moveTo(0, H / 2 + 2);
+      for (let x = 0; x <= W; x += 4) {
+        const a = (x / W) * Math.PI * 2;
+        g.lineTo(x, H / 2 - amp * (1 + 0.6 * Math.sin(a * 3 + seedP) + 0.35 * Math.sin(a * 7 + seedP * 2) + 0.2 * Math.sin(a * 13)));
+      }
+      g.lineTo(W, H / 2 + 2); g.fill();
+    };
+    ridge(34, 1, "#4A4F7E"); ridge(18, 4, "#262D52");
+    const ground = g.createLinearGradient(0, H / 2, 0, H);
+    ground.addColorStop(0, "#1F2A4A"); ground.addColorStop(1, "#0E1530");
+    g.fillStyle = ground; g.fillRect(0, H / 2, W, H / 2);
+    g.strokeStyle = "rgba(46,196,182,0.35)"; g.lineWidth = 1.5;
+    for (let k = 1; k < 9; k++) { const y = H / 2 + (H / 2) * (1 - 1 / (1 + k * 0.35)); g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+    for (let k = 0; k < 24; k++) { const x = (k / 24) * W; g.beginPath(); g.moveTo(x, H / 2 + 6); g.lineTo(x, H); g.stroke(); }
+    return new THREE.CanvasTexture(c);
+  }
+  const skyGeo = new THREE.SphereGeometry(50, 64, 32);
+  skyGeo.scale(-1, 1, 1); // 内側から見ても画像が鏡写しにならないように裏返す
+  const skyMat = new THREE.MeshBasicMaterial({ map: makeDefaultPano() });
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  sky.rotation.y = -Math.PI / 2; // 画像の中央が「正面」に来るように回す
+  sky.visible = false;
+  world.add(sky);
+
+  function setPanoTexture(tex) {
+    const old = skyMat.map;
+    skyMat.map = tex; skyMat.needsUpdate = true;
+    if (old && old !== tex) old.dispose();
+  }
+
+  let camOk = false, bgMode = "cam";
+  function setBg(m) {
+    bgMode = m;
+    document.body.classList.toggle("pano", m === "pano");
+    sky.visible = m === "pano";
+    grid.visible = m === "cam" && !camOk;
+    $("mCam").setAttribute("aria-pressed", String(m === "cam"));
+    $("mPano").setAttribute("aria-pressed", String(m === "pano"));
+    const video = $("cam");
+    if (camOk) { m === "pano" ? video.pause() : video.play().catch(() => {}); }
+  }
+  $("mCam").addEventListener("click", () => setBg("cam"));
+  $("mPano").addEventListener("click", () => setBg("pano"));
+  $("pick").addEventListener("click", () => $("file").click());
+
+  // 自分の360度画像（横:縦＝2:1）を読み込む
+  $("file").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const max = Math.min(renderer.capabilities.maxTextureSize || 4096, 4096);
+        const w = Math.min(img.width, max), h = Math.round(w * img.height / img.width);
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        setPanoTexture(new THREE.CanvasTexture(c));
+        setBg("pano");
+        const ratio = img.width / img.height;
+        note.textContent = Math.abs(ratio - 2) > 0.1
+          ? "横:縦が2:1ではない画像のため、ゆがんで見える場合があります。"
+          : "";
+      };
+      img.onerror = () => { note.textContent = "画像を読み込めませんでした。"; };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(f);
+  });
+
+  // 同じ場所に pano.jpg があれば最初の背景として使う（GitHub Pages 向け）
+  new THREE.TextureLoader().load("pano.jpg", (tex) => setPanoTexture(tex), undefined, () => {});
 
   function resize() {
     const w = window.innerWidth, h = window.innerHeight;
@@ -380,7 +490,6 @@ body.complete #done { display: flex; }
     }
     if (sensorAllowed) window.addEventListener("deviceorientation", onOrientation);
 
-    let camOk = false;
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no camera api");
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
@@ -390,15 +499,16 @@ body.complete #done { display: flex; }
       camOk = true;
     } catch (err) {
       document.body.classList.add("nocam");
-      grid.visible = true;
+      $("mCam").disabled = true;
     }
+    setBg(camOk ? "cam" : "pano");
 
     $("start").style.display = "none";
     resize();
     loop();
 
     const msgs = [];
-    if (!camOk) msgs.push("カメラを使えないため、空の背景で表示しています。");
+    if (!camOk) msgs.push("カメラを使えないため、360度画像の背景で表示しています。");
     setTimeout(() => {
       if (!sensorLive) {
         mode = "drag";
