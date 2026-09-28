@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>360° ARサンプル</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #14213D;
+  --paper: #FBF7EF;
+  --amber: #F2A541;
+  --teal: #2EC4B6;
+  --veil: rgba(20, 33, 61, 0.72);
+  --bg: #FBF7EF;
+  --text: #14213D;
+  --muted: #4A5670;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #14213D; --text: #FBF7EF; --muted: #B9C2D6; }
+}
+:root[data-theme="dark"] { --bg: #14213D; --text: #FBF7EF; --muted: #B9C2D6; }
+*, *::before, *::after { box-sizing: inherit; }
+html { scroll-padding-top: env(safe-area-inset-top, 0px); height: 100%; }
+body {
+  margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+  font-family: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+  -webkit-user-select: none; user-select: none;
+}
+#bg { position: fixed; inset: 0; background: #0E1830; }
+body.nocam #bg { background: linear-gradient(#1E3A6B 0%, #3C6E9F 55%, #9CC3D5 100%); }
+video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+body.nocam video { display: none; }
+canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+
+.hud {
+  position: fixed; top: 0; left: 0; right: 0; display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 0; pointer-events: none;
+}
+#tape { width: min(340px, 86vw); height: 46px; border-radius: 10px; background: var(--veil); }
+.count { font-size: 0.95rem; font-weight: 700; color: var(--paper); text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.bar {
+  position: fixed; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; align-items: center;
+  gap: 10px; padding: 0 16px calc(env(safe-area-inset-bottom, 0px) + 18px);
+}
+.note {
+  font-size: 0.85rem; color: var(--paper); background: var(--veil); padding: 6px 12px; border-radius: 8px;
+  max-width: 90vw; text-align: center; line-height: 1.5;
+}
+.note:empty { display: none; }
+button {
+  font: inherit; font-weight: 700; border: 0; cursor: pointer; border-radius: 999px;
+  padding: 12px 22px; font-size: 1rem;
+}
+button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+#reset { background: var(--paper); color: var(--ink); }
+
+#start {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: var(--bg); z-index: 5;
+}
+.intro { max-width: 30rem; }
+.intro h1 { font-size: clamp(2.2rem, 9vw, 3.4rem); line-height: 1.1; margin: 0 0 0.6em; letter-spacing: -0.01em; }
+.intro p { margin: 0 0 1em; line-height: 1.7; color: var(--muted); }
+.ring { display: block; width: 88px; height: 88px; margin-bottom: 20px; }
+#go { background: var(--amber); color: var(--ink); margin-top: 0.8em; }
+.small { font-size: 0.85rem; }
+#done {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center; pointer-events: none;
+}
+#done span {
+  background: var(--amber); color: var(--ink); font-weight: 700; font-size: 1.3rem; padding: 14px 24px; border-radius: 14px;
+}
+body.complete #done { display: flex; }
+@media (prefers-reduced-motion: no-preference) {
+  body.complete #done span { animation: pop .5s ease-out; }
+  @keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+}
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
+
+<div class="hud">
+  <canvas id="tape" aria-label="向きの目盛り"></canvas>
+  <div class="count" id="count">見つけた 0 / 8</div>
+</div>
+
+<div class="bar">
+  <div class="note" id="note" role="status"></div>
+  <button id="reset" type="button">いま向いている方を正面にする</button>
+</div>
+
+<div id="done"><span>8つ全部見つけました</span></div>
+
+<div id="start">
+  <div class="intro">
+    <svg class="ring" viewBox="0 0 88 88" aria-hidden="true">
+      <circle cx="44" cy="44" r="36" fill="none" stroke="#2EC4B6" stroke-width="4" stroke-dasharray="6 8"/>
+      <circle cx="44" cy="8" r="7" fill="#F2A541"/>
+      <circle cx="44" cy="44" r="6" fill="currentColor"/>
+    </svg>
+    <h1>ぐるっと<br>見回すAR</h1>
+    <p>あなたの周りに8つのオブジェクトが浮かんでいます。スマホを顔の前に立てて持ち、その場で一周してみてください。画面の中央にとらえると「見つけた」に数えられます。タップすると跳ねます。</p>
+    <p class="small">カメラと傾きセンサーの許可を求められたら「許可」を選んでください。パソコンや、センサーが使えない環境ではドラッグで見回せます。</p>
+    <button id="go" type="button">カメラとセンサーを使って始める</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const note = $("note");
+  const DEG = Math.PI / 180;
+
+  // ---------- 3D の基本 ----------
+  const renderer = new THREE.WebGLRenderer({ canvas: $("gl"), alpha: true, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setClearColor(0x000000, 0);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100); // スマホカメラの縦画角に近い値
+  camera.rotation.order = "YXZ";
+  const world = new THREE.Group(); // 「正面リセット」でこのグループを回す
+  scene.add(world);
+
+  scene.add(new THREE.HemisphereLight(0xfff6e6, 0x2a3a5a, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(3, 6, 2);
+  scene.add(sun);
+
+  const grid = new THREE.GridHelper(40, 40, 0xffffff, 0xffffff);
+  grid.material.transparent = true; grid.material.opacity = 0.18;
+  grid.position.y = -1.6; grid.visible = false;
+  world.add(grid);
+
+  function resize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    sizeTape();
+  }
+  window.addEventListener("resize", resize);
+
+  // ---------- オブジェクト配置（半径5mの円周上に45度おき） ----------
+  const NAMES = ["正面", "右前", "右", "右後ろ", "後ろ", "左後ろ", "左", "左前"];
+  const COLORS = [0xF2A541, 0x2EC4B6, 0xE85D75, 0x7A9CF5, 0xF4D35E, 0x5FBF6A, 0xC77DFF, 0xFF8C42];
+  const GEOMS = [
+    () => new THREE.TorusKnotGeometry(0.38, 0.13, 96, 12),
+    () => new THREE.IcosahedronGeometry(0.55, 0),
+    () => new THREE.OctahedronGeometry(0.6, 0),
+    () => new THREE.TorusGeometry(0.45, 0.16, 16, 48),
+    () => new THREE.DodecahedronGeometry(0.55, 0),
+    () => new THREE.ConeGeometry(0.5, 0.95, 5),
+    () => new THREE.BoxGeometry(0.75, 0.75, 0.75),
+    () => new THREE.SphereGeometry(0.5, 32, 16),
+  ];
+  const items = [];
+
+  function makeLabel(text) {
+    const c = document.createElement("canvas");
+    c.width = 256; c.height = 96;
+    const g = c.getContext("2d");
+    g.fillStyle = "rgba(251,247,239,0.92)";
+    const r = 40;
+    g.beginPath();
+    g.moveTo(r, 8); g.lineTo(256 - r, 8); g.arc(256 - r, 48, 40, -Math.PI / 2, Math.PI / 2);
+    g.lineTo(r, 88); g.arc(r, 48, 40, Math.PI / 2, Math.PI * 1.5); g.fill();
+    g.fillStyle = "#14213D";
+    g.font = '700 44px "Zen Kaku Gothic New", "Hiragino Sans", sans-serif';
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(text, 128, 50);
+    const tex = new THREE.CanvasTexture(c);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+    s.scale.set(1.3, 0.49, 1);
+    return s;
+  }
+
+  function buildObjects() {
+    for (let i = 0; i < 8; i++) {
+      const deg = i * 45, rad = deg * DEG, R = 5;
+      const holder = new THREE.Group();
+      holder.position.set(Math.sin(rad) * R, 0, -Math.cos(rad) * R);
+      const mat = new THREE.MeshStandardMaterial({
+        color: COLORS[i], roughness: 0.35, metalness: 0.1, emissive: COLORS[i], emissiveIntensity: 0.15,
+      });
+      const mesh = new THREE.Mesh(GEOMS[i](), mat);
+      const label = makeLabel(NAMES[i]);
+      label.position.y = 1.0;
+      holder.add(mesh, label);
+      world.add(holder);
+      mesh.userData.index = i;
+      items.push({ deg, holder, mesh, mat, phase: i * 0.8, spin: 0, bounce: 0, found: false });
+    }
+  }
+
+  // ---------- 向きの制御 ----------
+  let mode = "none";          // "sensor" | "drag"
+  let sensorLive = false;
+  let needsAutoReset = true;
+  const targetQ = new THREE.Quaternion();
+  const euler = new THREE.Euler();
+  const q0 = new THREE.Quaternion();
+  const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // 端末を立てた姿勢への補正
+  const zee = new THREE.Vector3(0, 0, 1);
+  let yaw = 0, pitch = 0;     // ドラッグ操作用
+
+  function screenAngle() {
+    const a = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    return a * DEG;
+  }
+
+  function onOrientation(e) {
+    if (e.alpha == null || e.beta == null || e.gamma == null) return;
+    euler.set(e.beta * DEG, e.alpha * DEG, -e.gamma * DEG, "YXZ");
+    targetQ.setFromEuler(euler);
+    targetQ.multiply(q1);
+    targetQ.multiply(q0.setFromAxisAngle(zee, -screenAngle()));
+    if (!sensorLive) {
+      sensorLive = true;
+      mode = "sensor";
+      camera.quaternion.copy(targetQ);
+      note.textContent = "";
+    }
+  }
+
+  const fwd = new THREE.Vector3();
+  function cameraYaw() {
+    fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    return Math.atan2(fwd.x, -fwd.z);
+  }
+
+  function resetFront() {
+    if (mode === "drag") { yaw = 0; pitch = 0; world.rotation.y = 0; }
+    else { world.rotation.y = -cameraYaw(); }
+  }
+  $("reset").addEventListener("click", resetFront);
+
+  // ---------- ドラッグとタップ ----------
+  const gl = $("gl");
+  let down = null;
+  gl.addEventListener("pointerdown", (e) => {
+    down = { x: e.clientX, y: e.clientY, yaw, pitch };
+    gl.setPointerCapture(e.pointerId);
+  });
+  gl.addEventListener("pointermove", (e) => {
+    if (!down || mode !== "drag") return;
+    const k = 0.25 * DEG;
+    yaw = down.yaw - (e.clientX - down.x) * k;
+    pitch = Math.max(-80 * DEG, Math.min(80 * DEG, down.pitch - (e.clientY - down.y) * k));
+  });
+  gl.addEventListener("pointerup", (e) => {
+    if (!down) return;
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+    down = null;
+    if (moved < 8) tap(e.clientX, e.clientY);
+  });
+
+  const ray = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  function tap(x, y) {
+    ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const hit = ray.intersectObjects(items.map((o) => o.mesh))[0];
+    if (!hit) return;
+    const o = items[hit.object.userData.index];
+    o.spin = 10; o.bounce = 1;
+    markFound(o);
+  }
+
+  // ---------- 「見つけた」判定 ----------
+  let foundCount = 0;
+  function markFound(o) {
+    if (o.found) return;
+    o.found = true; foundCount++;
+    o.mat.emissiveIntensity = 0.45;
+    o.bounce = 1;
+    $("count").textContent = `見つけた ${foundCount} / 8`;
+    if (foundCount === 8) {
+      document.body.classList.add("complete");
+      setTimeout(() => document.body.classList.remove("complete"), 3000);
+    }
+  }
+
+  // ---------- 目盛りテープ ----------
+  const tape = $("tape");
+  const tg = tape.getContext("2d");
+  let TW = 0, TH = 0;
+  function sizeTape() {
+    const r = tape.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
+    TW = r.width; TH = r.height;
+    tape.width = TW * d; tape.height = TH * d;
+    tg.setTransform(d, 0, 0, d, 0, 0);
+  }
+  const TAPE_LABELS = { 0: "正面", 90: "右", 180: "後ろ", 270: "左" };
+  function drawTape(heading) {
+    tg.clearRect(0, 0, TW, TH);
+    const span = 60, ppd = TW / (span * 2), cx = TW / 2;
+    tg.textAlign = "center"; tg.textBaseline = "top";
+    tg.font = '700 12px "Zen Kaku Gothic New", sans-serif';
+    const start = Math.ceil((heading - span) / 15) * 15;
+    for (let d = start; d <= heading + span; d += 15) {
+      const x = cx + (d - heading) * ppd;
+      const n = ((d % 360) + 360) % 360;
+      tg.strokeStyle = "rgba(251,247,239,0.7)";
+      tg.lineWidth = 1;
+      tg.beginPath(); tg.moveTo(x, TH - 4); tg.lineTo(x, TH - (n % 45 === 0 ? 14 : 8)); tg.stroke();
+      if (n % 45 === 0) {
+        const o = items[n / 45];
+        if (o) {
+          tg.beginPath(); tg.arc(x, 21, 4.5, 0, Math.PI * 2);
+          tg.fillStyle = "#" + COLORS[n / 45].toString(16).padStart(6, "0");
+          tg.strokeStyle = tg.fillStyle; tg.lineWidth = 2;
+          o.found ? tg.fill() : tg.stroke();
+        }
+      }
+      if (TAPE_LABELS[n] !== undefined) { tg.fillStyle = "#FBF7EF"; tg.fillText(TAPE_LABELS[n], x, 3); }
+    }
+    tg.fillStyle = "#F2A541";
+    tg.beginPath(); tg.moveTo(cx - 6, TH); tg.lineTo(cx + 6, TH); tg.lineTo(cx, TH - 8); tg.fill();
+  }
+
+  // ---------- 描画ループ ----------
+  const clock = new THREE.Clock();
+  const v = new THREE.Vector3();
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function loop() {
+    const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+
+    if (mode === "sensor") {
+      camera.quaternion.slerp(targetQ, 0.35); // センサーの細かな揺れをならす
+      if (needsAutoReset) { needsAutoReset = false; resetFront(); }
+    } else if (mode === "drag") {
+      camera.rotation.set(pitch, -yaw, 0);
+    }
+
+    for (const o of items) {
+      o.mesh.rotation.y += dt * (0.6 + o.spin);
+      o.mesh.rotation.x += dt * 0.25;
+      o.spin *= 0.94;
+      o.holder.position.y = reduceMotion ? 0 : Math.sin(t * 1.2 + o.phase) * 0.15;
+      if (o.bounce > 0) {
+        o.bounce = Math.max(0, o.bounce - dt * 1.8);
+        o.mesh.scale.setScalar(1 + 0.45 * Math.sin((1 - o.bounce) * Math.PI));
+      }
+    }
+    camera.updateMatrixWorld();
+    for (const o of items) {
+      if (o.found) continue;
+      v.setFromMatrixPosition(o.mesh.matrixWorld).project(camera);
+      if (v.z < 1 && Math.abs(v.x) < 0.3 && Math.abs(v.y) < 0.4) markFound(o);
+    }
+
+    let heading = (cameraYaw() + world.rotation.y) / DEG;
+    heading = ((heading % 360) + 360) % 360;
+    drawTape(heading);
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- 開始 ----------
+  async function start() {
+    const btn = $("go");
+    btn.disabled = true;
+
+    // iPhone はボタン操作の直後にセンサーの許可を求める必要がある（カメラより先に）
+    let sensorAllowed = true;
+    if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function") {
+      try { sensorAllowed = (await DeviceOrientationEvent.requestPermission()) === "granted"; }
+      catch (err) { sensorAllowed = false; }
+    }
+    if (sensorAllowed) window.addEventListener("deviceorientation", onOrientation);
+
+    let camOk = false;
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no camera api");
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      const video = $("cam");
+      video.srcObject = stream;
+      await video.play();
+      camOk = true;
+    } catch (err) {
+      document.body.classList.add("nocam");
+      grid.visible = true;
+    }
+
+    $("start").style.display = "none";
+    resize();
+    loop();
+
+    const msgs = [];
+    if (!camOk) msgs.push("カメラを使えないため、空の背景で表示しています。");
+    setTimeout(() => {
+      if (!sensorLive) {
+        mode = "drag";
+        msgs.push("傾きセンサーを使えないため、ドラッグで見回せます。");
+      }
+      note.textContent = msgs.join(" ");
+    }, 1500);
+    note.textContent = msgs.join(" ");
+  }
+
+  const ready = document.fonts && document.fonts.ready ? document.fonts.ready.catch(() => {}) : Promise.resolve();
+  ready.then(buildObjects);
+  $("go").addEventListener("click", () => ready.then(start));
+})();
+</script>
+</body>
+</html>
