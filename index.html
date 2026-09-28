@@ -76,14 +76,15 @@ body:not(.pano) #pick { display: none; }
 body.pano video { visibility: hidden; }
 
 #start {
-  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
+  position: fixed; inset: 0; display: flex; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: calc(env(safe-area-inset-top, 0px) + 20px) 22px calc(env(safe-area-inset-bottom, 0px) + 20px);
   background: var(--bg); z-index: 5;
 }
-.intro { max-width: 30rem; }
-.intro h1 { font-size: clamp(2.2rem, 9vw, 3.4rem); line-height: 1.1; margin: 0 0 0.6em; letter-spacing: -0.01em; }
-.intro p { margin: 0 0 1em; line-height: 1.7; color: var(--muted); }
-.ring { display: block; width: 88px; height: 88px; margin-bottom: 20px; }
-#go { background: var(--amber); color: var(--ink); margin-top: 0.8em; }
+.intro { max-width: 30rem; margin: auto; } /* 画面に収まれば中央、収まらなければスクロール */
+.intro h1 { font-size: clamp(1.9rem, 8vw, 3.4rem); line-height: 1.1; margin: 0 0 0.5em; letter-spacing: -0.01em; }
+.intro p { margin: 0 0 0.9em; line-height: 1.65; color: var(--muted); font-size: 0.95rem; }
+.ring { display: block; width: 64px; height: 64px; margin-bottom: 14px; }
+#go { background: var(--amber); color: var(--ink); margin-top: 0.4em; width: 100%; max-width: 22rem; }
 .small { font-size: 0.85rem; }
 #done {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center; pointer-events: none;
