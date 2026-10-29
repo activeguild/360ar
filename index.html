@@ -37,6 +37,8 @@ body.nocam #bg { background: linear-gradient(#1E3A6B 0%, #3C6E9F 55%, #9CC3D5 10
 video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 body.nocam video { display: none; }
 canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+canvas#people { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+body.pano canvas#people, body.nocam canvas#people { display: none; }
 
 .hud {
   position: fixed; top: 0; left: 0; right: 0; display: flex; flex-direction: column; align-items: center;
@@ -66,7 +68,8 @@ button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
 .seg button:disabled { opacity: 0.4; cursor: not-allowed; }
 #pick { background: var(--veil); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(251,247,239,.5); padding: 10px 18px; font-size: 0.95rem; }
 body:not(.pano) #pick { display: none; }
-#snd { background: var(--veil); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(251,247,239,.5); padding: 10px 18px; font-size: 0.95rem; }
+#snd, #occ { background: var(--veil); color: var(--paper); box-shadow: inset 0 0 0 1px rgba(251,247,239,.5); padding: 10px 18px; font-size: 0.95rem; }
+body.pano #occ, body.nocam #occ { display: none; }
 #reticle { position: fixed; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; pointer-events: none; transition: transform .2s; }
 #reticle.on { transform: scale(1.25); }
 #reticle circle { fill: none; stroke-width: 3; }
@@ -103,6 +106,7 @@ body.complete #done { display: flex; }
 <div id="bg"></div>
 <video id="cam" playsinline muted autoplay></video>
 <canvas id="gl"></canvas>
+<canvas id="people" aria-hidden="true"></canvas>
 
 <div class="hud">
   <canvas id="tape" aria-label="向きの目盛り"></canvas>
@@ -118,6 +122,7 @@ body.complete #done { display: flex; }
     </div>
     <button id="pick" type="button">画像を選ぶ</button>
     <button id="snd" type="button" aria-pressed="true">音あり</button>
+    <button id="occ" type="button" aria-pressed="true">人を手前に：オン</button>
   </div>
   <button id="reset" type="button">中央に戻って正面をそろえる</button>
   <input type="file" id="file" accept="image/*" hidden>
@@ -137,7 +142,7 @@ body.complete #done { display: flex; }
     </svg>
     <h1>ぐるっと<br>見回すAR</h1>
     <p>あなたの周りに8つのオブジェクトが隠れています。スマホを顔の前に立てて持ち、その場で見回してください。画面中央の照準で見つめ続けるか、歩いて近づくと「見つけた」になります。オブジェクトの方へ歩くと、そのぶん近づいて大きく見えます。イヤホンを付けると、まだ見つけていないものが鳴っている方向が分かります。全部見つけると……お楽しみに。空をタップすると花火が上がります。</p>
-    <p>背景はカメラ映像と360度画像を切り替えられます。360度画像にすると、その景色の中に立っているような表示になります。</p>
+    <p>背景はカメラ映像と360度画像を切り替えられます。カメラ映像に写った人は、オブジェクトより手前に表示されます。360度画像にすると、その景色の中に立っているような表示になります。</p>
     <p class="small">カメラと傾きセンサーの許可を求められたら「許可」を選んでください。パソコンや、センサーが使えない環境ではドラッグで見回し、W・Sキー（または↑・↓キー）で前後に移動できます。</p>
     <button id="go" type="button">カメラとセンサーを使って始める</button>
   </div>
@@ -273,9 +278,79 @@ body.complete #done { display: flex; }
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    people.width = w; people.height = h;
     sizeTape();
   }
   window.addEventListener("resize", resize);
+
+  // ---------- 人物オクルージョン（カメラに写った人をオブジェクトより手前に見せる） ----------
+  // 人の形だけを切り抜くので前後関係は分からず、写った人は常にオブジェクトより手前に表示される
+  const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+  const SEG_MODEL = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+  const people = $("people"), pg = people.getContext("2d");
+  const maskCv = document.createElement("canvas"), mg = maskCv.getContext("2d");
+  let occOn = true, segmenter = null, segLoading = false, lastVideoTime = -1, maskImg = null, peopleShown = false;
+
+  async function loadSegmenter() {
+    if (segmenter || segLoading) return;
+    segLoading = true;
+    try {
+      const { FilesetResolver, ImageSegmenter } = await import(`${MP}/vision_bundle.mjs`);
+      const files = await FilesetResolver.forVisionTasks(`${MP}/wasm`);
+      const opts = (delegate) => ({
+        baseOptions: { modelAssetPath: SEG_MODEL, delegate },
+        runningMode: "VIDEO", outputConfidenceMasks: true, outputCategoryMask: false,
+      });
+      try { segmenter = await ImageSegmenter.createFromOptions(files, opts("GPU")); }
+      catch (e) { segmenter = await ImageSegmenter.createFromOptions(files, opts("CPU")); }
+    } catch (e) {
+      setOcc(false);
+      note.textContent = "人を手前に表示する機能を読み込めませんでした。";
+    }
+    segLoading = false;
+  }
+
+  function setOcc(on) {
+    occOn = on;
+    $("occ").setAttribute("aria-pressed", String(on));
+    $("occ").textContent = on ? "人を手前に：オン" : "人を手前に：オフ";
+    if (on && camOk) loadSegmenter();
+  }
+  $("occ").addEventListener("click", () => setOcc(!occOn));
+
+  function drawPeople() {
+    const video = $("cam");
+    if (!occOn || !camOk || bgMode !== "cam" || !segmenter) {
+      if (peopleShown) { pg.clearRect(0, 0, people.width, people.height); peopleShown = false; }
+      return;
+    }
+    if (video.readyState < 2 || video.currentTime === lastVideoTime) return; // 新しいコマが来たときだけ
+    lastVideoTime = video.currentTime;
+    segmenter.segmentForVideo(video, performance.now(), (res) => {
+      const masks = res.confidenceMasks;
+      if (!masks || !masks.length) return;
+      const m = masks[masks.length - 1]; // 人である確からしさ
+      const w = m.width, h = m.height, a = m.getAsFloat32Array();
+      if (!maskImg || maskImg.width !== w || maskImg.height !== h) {
+        maskCv.width = w; maskCv.height = h;
+        maskImg = mg.createImageData(w, h);
+      }
+      const d = maskImg.data;
+      for (let i = 0; i < a.length; i++) {
+        d[i * 4 + 3] = Math.min(1, Math.max(0, (a[i] - 0.35) / 0.3)) * 255; // 境目を少しなめらかに
+      }
+      mg.putImageData(maskImg, 0, 0);
+      // 背景の映像（object-fit: cover）と同じ位置・大きさで重ねる
+      const W = people.width, H = people.height, vw = video.videoWidth, vh = video.videoHeight;
+      const s = Math.max(W / vw, H / vh), dw = vw * s, dh = vh * s, dx = (W - dw) / 2, dy = (H - dh) / 2;
+      pg.globalCompositeOperation = "copy";
+      pg.drawImage(video, dx, dy, dw, dh);
+      pg.globalCompositeOperation = "destination-in";
+      pg.drawImage(maskCv, dx, dy, dw, dh);
+      pg.globalCompositeOperation = "source-over";
+      peopleShown = true;
+    });
+  }
 
   // ---------- オブジェクト配置（半径5mの円周上に45度おき） ----------
   const NAMES = ["正面", "右前", "右", "右後ろ", "後ろ", "左後ろ", "左", "左前"];
@@ -744,6 +819,7 @@ body.complete #done { display: flex; }
     drawTape(heading);
 
     renderer.render(scene, camera);
+    drawPeople();
     requestAnimationFrame(loop);
   }
 
@@ -771,6 +847,7 @@ body.complete #done { display: flex; }
       video.srcObject = stream;
       await video.play();
       camOk = true;
+      if (occOn) loadSegmenter();
     } catch (err) {
       document.body.classList.add("nocam");
       $("mCam").disabled = true;
